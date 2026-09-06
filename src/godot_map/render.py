@@ -10,8 +10,12 @@ JSON is the *query* tier with every node and edge.
 from __future__ import annotations
 
 import json
+import os
+import re
 
 from .scan import Project
+
+_MAX_USERS = 6  # "used by" cells longer than this show a count
 
 
 def _short(path: str) -> str:
@@ -41,7 +45,16 @@ def _tree(project: Project, path: str) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(project: Project, *, trees: bool = True, max_tree_nodes: int = 40) -> str:
+def _users_cell(users: list[str]) -> str:
+    shown = [u.split(":", 1)[1] if u.startswith("autoload:") else _short(u) for u in users]
+    if len(shown) > _MAX_USERS:
+        return ", ".join(shown[: _MAX_USERS - 2]) + f", +{len(shown) - _MAX_USERS + 2} more"
+    return ", ".join(shown)
+
+
+def render_markdown(
+    project: Project, *, trees: bool = True, max_tree_nodes: int = 40, mermaid: bool = False
+) -> str:
     out: list[str] = []
     name = project.name or _short(project.root)
     out.append(f"# Project map: {name}\n")
@@ -69,17 +82,24 @@ def render_markdown(project: Project, *, trees: bool = True, max_tree_nodes: int
             out.append(f"| {aname} | {_link(path)} | {cls} | {sigs} |")
         out.append("")
 
-    # Autoload signal wiring
-    wiring = _autoload_wiring(project)
+    # Signal wiring: every signal a project script declares, with its
+    # emitters and its listeners from code and from scene [connection]s.
+    wiring = signal_wiring(project)
     if wiring:
-        out.append("## Autoload signal wiring\n")
-        out.append("Who emits and who listens, from `X.signal.emit(` and `X.signal.connect(` in scripts.\n")
-        out.append("| Signal | Emitted in | Connected in |")
-        out.append("|---|---|---|")
-        for sig, (emitters, listeners) in wiring.items():
+        out.append("## Signal wiring\n")
+        out.append(
+            "Every `signal` a project script declares that something listens to, or that another script emits. "
+            "Code listeners are `X.sig.connect(`; scene listeners are `[connection]` blocks, "
+            "as `scene: from → to.method`. Engine signals (`pressed`, `body_entered`) are under each scene.\n"
+        )
+        out.append("| Signal | Declared in | Emitted in | Connected in code | Connected in scenes |")
+        out.append("|---|---|---|---|---|")
+        for row in wiring:
             out.append(
-                f"| {sig} | {', '.join(_link(p) for p in emitters) or '—'} | "
-                f"{', '.join(_link(p) for p in listeners) or '—'} |"
+                f"| {row['signal']} | {', '.join(_link(p) for p in row['declared_in'])} | "
+                f"{', '.join(_link(p) for p in row['emitted_in']) or '—'} | "
+                f"{', '.join(_link(p) for p in row['connected_in_code']) or '—'} | "
+                f"{', '.join(row['connected_in_scenes']) or '—'} |"
             )
         out.append("")
 
@@ -152,38 +172,116 @@ def render_markdown(project: Project, *, trees: bool = True, max_tree_nodes: int
         for path, s in sorted(project.scripts.items()):
             if path in tests:
                 continue
-            users = project.used_by.get(path, [])
-            users_txt = ", ".join(
-                u.split(":", 1)[1] if u.startswith("autoload:") else _short(u) for u in users
-            )
+            cls = s.class_name or ""
+            if cls and not s.is_global:
+                cls += " (C#, not global)"
             out.append(
-                f"| {_link(path)} | {s.extends or ''} | {s.class_name or ''} | {users_txt} | "
+                f"| {_link(path)} | {s.extends or ''} | {cls} | {_users_cell(project.used_by.get(path, []))} | "
                 f"{len(s.signals)} | {len(s.funcs)} |"
             )
+        out.append("")
+
+    # Data files: a count, and the directories holding files nothing names.
+    if project.data:
+        out.append("## Data files\n")
+        loose_dirs: dict[str, int] = {}
+        for p in project.data:
+            if p not in project.used_by:
+                parts = _short(p).split("/")[:-1]
+                d = "/".join(parts[:2]) + "/" if parts else "./"
+                loose_dirs[d] = loose_dirs.get(d, 0) + 1
+        line = f"{len(project.data)} `.json`/`.csv`/`.gdshader` files; each one's users are under `data` in the JSON."
+        if loose_dirs:
+            line += " Named by no scene, resource or script literal (loaded by a built path, or unused): " + ", ".join(
+                f"`{d}` ({n})" for d, n in sorted(loose_dirs.items())
+            ) + "."
+        out.append(line)
+        out.append("")
+
+    if mermaid and project.scenes:
+        out.append("## Scene graph\n")
+        out.append("```mermaid")
+        out.extend(_mermaid(project))
+        out.append("```")
         out.append("")
 
     return "\n".join(out).rstrip() + "\n"
 
 
-def _autoload_wiring(project: Project) -> dict[str, tuple[list[str], list[str]]]:
-    """{ 'EventBus.saved': ([emitters], [listeners]) } for every autoload signal."""
-    autoload_names = set(project.autoloads)
-    wiring: dict[str, tuple[list[str], list[str]]] = {}
-    for aname, path in project.autoloads.items():
-        script = project.scripts.get(path)
-        if not script:
-            continue
-        for sig in script.signals:
-            wiring[f"{aname}.{sig}"] = ([], [])
+def _mermaid(project: Project) -> list[str]:
+    """A scene-instance graph: every scene a node, every instance an edge."""
+    ids: dict[str, str] = {}
+    for path in sorted(project.scenes):
+        ids[path] = "s" + re.sub(r"\W", "_", _short(path))
+    lines = ["graph LR"]
+    for path in sorted(project.scenes):
+        label = _short(path)
+        lines.append(f'  {ids[path]}["{label}"]' + (":::main" if path == project.main_scene else ""))
+    for path, scene in sorted(project.scenes.items()):
+        for inst in scene.instances:
+            if inst in ids:
+                lines.append(f"  {ids[path]} --> {ids[inst]}")
+        if scene.inherits and scene.inherits in ids:
+            lines.append(f"  {ids[path]} -.->|inherits| {ids[scene.inherits]}")
+    if project.main_scene in ids:
+        lines.append("  classDef main stroke-width:3px")
+    return lines
+
+
+def signal_wiring(project: Project) -> list[dict]:
+    """One row per declared signal that something emits or listens to.
+
+    Autoload signals are keyed ``Autoload.sig`` and matched on that exact
+    target. Every other declared signal is keyed by name and matched on the
+    last segment of an emit/connect target (``enemy.died.connect(`` and a
+    bare ``died.emit(`` both count), so a name declared by two classes is
+    one row naming both."""
+    autoload_by_path = {p: n for n, p in project.autoloads.items()}
+    rows: dict[str, dict] = {}
+
+    def row(key: str) -> dict:
+        return rows.setdefault(
+            key,
+            {"signal": key, "declared_in": [], "emitted_in": [], "connected_in_code": [], "connected_in_scenes": []},
+        )
+
+    named: dict[str, str] = {}  # bare signal name -> row key (non-autoload)
     for spath, s in sorted(project.scripts.items()):
-        for target in s.emits:
-            if "." in target and target.split(".", 1)[0] in autoload_names:
-                wiring.setdefault(target, ([], []))[0].append(spath)
-        for target in s.connects:
-            if "." in target and target.split(".", 1)[0] in autoload_names:
-                wiring.setdefault(target, ([], []))[1].append(spath)
-    # drop autoload signals that nobody emits or connects — they are in the table above
-    return {k: v for k, v in sorted(wiring.items()) if v[0] or v[1]}
+        for sig in s.signals:
+            if spath in autoload_by_path:
+                row(f"{autoload_by_path[spath]}.{sig}")["declared_in"].append(spath)
+            else:
+                row(sig)["declared_in"].append(spath)
+                named[sig] = sig
+    autoload_keys = {k for k in rows if "." in k}
+    for spath, s in sorted(project.scripts.items()):
+        for col, targets in (("emitted_in", s.emits), ("connected_in_code", s.connects)):
+            for target in targets:
+                if target in autoload_keys:
+                    key = target
+                else:
+                    name = target.rsplit(".", 1)[-1]
+                    if name not in named:
+                        continue
+                    key = name
+                    # a bare emit of an autoload's own signal, inside the autoload
+                    if "." not in target and spath in autoload_by_path and f"{autoload_by_path[spath]}.{name}" in rows:
+                        key = f"{autoload_by_path[spath]}.{name}"
+                if spath not in rows[key][col]:
+                    rows[key][col].append(spath)
+    for scene_path, scene in sorted(project.scenes.items()):
+        for c in scene.connections:
+            if c.signal in named:
+                rows[c.signal]["connected_in_scenes"].append(
+                    f"`{_short(scene_path)}`: {c.from_node} → {c.to_node}.{c.method}"
+                )
+    # A signal only its own declarer emits, with no listener anywhere, is
+    # already in the class index; it earns no row here.
+    return [
+        r for _, r in sorted(rows.items())
+        if r["connected_in_code"] or r["connected_in_scenes"]
+        or any(e not in r["declared_in"] for e in r["emitted_in"])
+    ]
 
 
 def render_json(project: Project) -> str:

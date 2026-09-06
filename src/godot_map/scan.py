@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from . import gdscript, tscn
+from . import csharp, gdscript, tscn
 
-SKIP_DIRS = {".godot", ".git", ".import", "addons", "node_modules", ".venv", "builds", "shots"}
+SKIP_DIRS = {
+    ".godot", ".git", ".import", "addons", "node_modules", ".venv", "builds", "shots",
+    "bin", "obj", ".mono",
+}
+DATA_EXTS = (".json", ".csv", ".gdshader")
 
 
 @dataclass
@@ -18,6 +22,7 @@ class NodeInfo:
     script: str | None = None  # res:// path
     instance: str | None = None  # res:// path of the instanced scene
     groups: list[str] = field(default_factory=list)
+    unique: bool = False  # unique_name_in_owner, reachable as %Name
 
     def to_dict(self) -> dict:
         return {
@@ -27,6 +32,7 @@ class NodeInfo:
             "script": self.script,
             "instance": self.instance,
             "groups": self.groups,
+            "unique": self.unique,
         }
 
 
@@ -85,9 +91,10 @@ class ResourceInfo:
     path: str
     type: str | None
     script: str | None = None
+    resources: list[str] = field(default_factory=list)  # other external resources it names
 
     def to_dict(self) -> dict:
-        return {"path": self.path, "type": self.type, "script": self.script}
+        return {"path": self.path, "type": self.type, "script": self.script, "resources": self.resources}
 
 
 @dataclass
@@ -100,6 +107,7 @@ class Project:
     scenes: dict[str, SceneInfo] = field(default_factory=dict)
     scripts: dict[str, gdscript.ScriptInfo] = field(default_factory=dict)
     resources: dict[str, ResourceInfo] = field(default_factory=dict)
+    data: list[str] = field(default_factory=list)  # res:// paths of .json/.csv/.gdshader files
     uids: dict[str, str] = field(default_factory=dict)  # uid:// -> res://
 
     # derived
@@ -115,6 +123,7 @@ class Project:
             "scenes": {k: v.to_dict() for k, v in sorted(self.scenes.items())},
             "scripts": {k: v.to_dict() for k, v in sorted(self.scripts.items())},
             "resources": {k: v.to_dict() for k, v in sorted(self.resources.items())},
+            "data": {k: {"used_by": sorted(self.used_by.get(k, []))} for k in sorted(self.data)},
             "classes": dict(sorted(self.classes.items())),
             "used_by": {k: sorted(v) for k, v in sorted(self.used_by.items())},
         }
@@ -192,6 +201,7 @@ def _read_scene(project: Project, res_path: str, fs_path: str) -> SceneInfo:
             groups = sec.attrs.get("groups")
             if isinstance(groups, list):
                 node.groups = groups
+            node.unique = sec.props.get("unique_name_in_owner", "").strip() == "true"
             scene.nodes.append(node)
             if parent is None:
                 scene.root = node
@@ -219,7 +229,13 @@ def _read_resource(project: Project, res_path: str, fs_path: str) -> ResourceInf
             if uid:
                 project.uids[uid] = res_path
         elif sec.name == "ext_resource":
-            ext[str(sec.attr_str("id"))] = {"type": sec.attr_str("type"), "path": sec.attr_str("path")}
+            entry = {"type": sec.attr_str("type"), "path": sec.attr_str("path")}
+            ext[str(sec.attr_str("id"))] = entry
+            uid = sec.attr_str("uid")
+            if uid and entry["path"]:
+                project.uids.setdefault(uid, entry["path"])
+            if entry["path"] and entry["type"] != "Script":
+                info.resources.append(entry["path"])
         elif sec.name == "resource":
             ref = sec.prop_ref("script")
             if isinstance(ref, tscn.Ref) and ref.id in ext:
@@ -262,10 +278,19 @@ def _derive(project: Project) -> None:
             use(script.extends, script.path)
     for res in project.resources.values():
         use(res.script, res.path)
-    # extends by class_name is a use too
+        for r in _uniq(res.resources):
+            use(r, res.path)
+    # A class_name or autoload named anywhere in a script (X.new(), a static
+    # call, a type hint, `is X`, `extends X`) is a use of its script. This is
+    # where most uses live in a project that builds its UI in code.
+    by_name = dict(project.classes)
+    by_name.update(project.autoloads)
     for script in project.scripts.values():
-        if script.extends and script.extends in project.classes:
-            use(project.classes[script.extends], script.path)
+        for name, target in by_name.items():
+            if target != script.path and name in script.idents:
+                use(target, script.path)
+    for users in project.used_by.values():
+        users.sort()
 
 
 def scan(root: str) -> Project:
@@ -278,6 +303,10 @@ def scan(root: str) -> Project:
             project.scenes[res_path] = _read_scene(project, res_path, fs_path)
         elif fs_path.endswith(".gd"):
             project.scripts[res_path] = gdscript.scan_file(res_path, fs_path)
+        elif fs_path.endswith(".cs"):
+            project.scripts[res_path] = csharp.scan_file(res_path, fs_path)
+        elif fs_path.endswith(DATA_EXTS):
+            project.data.append(res_path)
         elif fs_path.endswith(".tres"):
             project.resources[res_path] = _read_resource(project, res_path, fs_path)
         elif fs_path.endswith(".uid"):

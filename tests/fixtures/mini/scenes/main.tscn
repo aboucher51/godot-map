@@ -27,3 +27,4 @@ list = Array[int]([1,
 
 [connection signal="pressed" from="Hud/StartButton" to="." method="_on_start_pressed"]
 [connection signal="score_changed" from="." to="Hud" method="_on_score_changed"]
+[connection signal="died" from="Hud" to="Hud" method="_on_died"]

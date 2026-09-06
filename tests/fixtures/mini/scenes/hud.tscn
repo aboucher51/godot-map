@@ -9,4 +9,5 @@ script = ExtResource("1")
 text = "Start"
 
 [node name="ScoreLabel" type="Label" parent="."]
+unique_name_in_owner = true
 text = "0"

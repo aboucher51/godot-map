@@ -52,3 +52,11 @@ def test_legacy_numeric_ext_resource():
     assert secs[0].attrs["id"] == 1
     ref = secs[1].prop_ref("script")
     assert isinstance(ref, tscn.Ref) and ref.id == "1"
+
+
+def test_unique_name_in_owner():
+    from godot_map.scan import scan
+    import os
+    project = scan(os.path.join(os.path.dirname(__file__), "fixtures", "mini"))
+    node = next(n for n in project.scenes["res://scenes/hud.tscn"].nodes if n.name == "ScoreLabel")
+    assert node.unique and node.to_dict()["unique"] is True

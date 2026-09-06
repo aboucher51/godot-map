@@ -34,7 +34,9 @@ Kombucha's `docs/godot-tooling.md` and `tools/check.sh`, not here.
 src/godot_map/
   tscn.py       section-level reader for .tscn / .tres / project.godot
   gdscript.py   regex facts about a .gd
+  csharp.py     the same facts about a .cs
   scan.py       walk the project, build the model, derive used_by/classes
+  query.py      --who trees and the --paths node-path check
   render.py     Markdown + JSON
   cli.py        argparse entry point
 tests/fixtures/mini/   a tiny Godot project covering every shape read

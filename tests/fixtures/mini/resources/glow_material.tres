@@ -1,0 +1,6 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3 uid="uid://r2glow0000001"]
+
+[ext_resource type="Shader" path="res://shaders/glow.gdshader" id="1_glow"]
+
+[resource]
+shader = ExtResource("1_glow")

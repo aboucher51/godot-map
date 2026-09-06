@@ -45,6 +45,7 @@ def test_scene_connections(project):
     assert [(c.signal, c.from_node, c.to_node, c.method) for c in scene.connections] == [
         ("pressed", "Hud/StartButton", ".", "_on_start_pressed"),
         ("score_changed", ".", "Hud", "_on_score_changed"),
+        ("died", "Hud", "Hud", "_on_died"),
     ]
 
 
@@ -58,7 +59,8 @@ def test_script_facts(project):
     assert "helper" in main.funcs and "_ready" in main.funcs
     assert "EventBus.score_changed" in main.emits and "round_started" in main.emits
     assert "EventBus.score_changed" in main.connects
-    assert main.node_paths == ["Hud/StartButton", "Camera/Deep"]
+    assert main.node_paths == ["Hud/StartButton", "Camera/Deep", "Hud/ScoreLabel", "Hud/Nope", "MenuBox"]
+    assert main.named_nodes == {"MenuBox"}
 
     enemy = project.scripts["res://scripts/enemy.gd"]
     assert enemy.is_tool and enemy.extends == "res://scripts/actor.gd"
@@ -70,13 +72,43 @@ def test_classes_and_used_by(project):
         "Actor": "res://scripts/actor.gd",
         "Enemy": "res://scripts/enemy.gd",
         "Hud": "res://scripts/hud.gd",
+        "Bullet": "res://scripts/csharp/Bullet.cs",
     }
     ub = project.used_by
     assert ub["res://scripts/main.gd"] == ["res://scenes/main.tscn"]
-    assert ub["res://scenes/hud.tscn"] == ["res://scenes/main.tscn", "res://scripts/main.gd"]
-    assert "autoload:EventBus" in ub["res://scripts/autoloads/event_bus.gd"]
-    assert ub["res://scripts/actor.gd"] == ["res://scripts/enemy.gd", "res://resources/stats.tres"]
+    assert ub["res://scenes/hud.tscn"] == ["res://scenes/main.tscn", "res://scripts/csharp/Bullet.cs", "res://scripts/main.gd"]
+    # naming an autoload or a class_name in code is a use of its script
+    assert ub["res://scripts/autoloads/event_bus.gd"] == [
+        "autoload:EventBus", "res://scripts/autoloads/game_manager.gd", "res://scripts/main.gd"]
+    assert ub["res://scripts/actor.gd"] == [
+        "res://resources/stats.tres", "res://scripts/csharp/Bullet.cs", "res://scripts/enemy.gd", "res://scripts/hud.gd"]
     assert "res://scripts/orphan.gd" not in ub
+
+
+def test_unique_names_and_node_paths(project):
+    hud = project.scenes["res://scenes/hud.tscn"]
+    assert [n.name for n in hud.nodes if n.unique] == ["ScoreLabel"]
+    # %Unique counts, "%s" in a format string and a path in a string do not
+    assert project.scripts["res://scripts/hud.gd"].node_paths == ["ScoreLabel", "%ScoreLabel", "Missing"]
+
+
+def test_data_files(project):
+    assert project.data == ["res://data/levels.json", "res://data/unused.csv", "res://shaders/glow.gdshader"]
+    ub = project.used_by
+    assert ub["res://data/levels.json"] == ["res://scripts/csharp/Bullet.cs", "res://scripts/main.gd"]
+    assert ub["res://shaders/glow.gdshader"] == ["res://resources/glow_material.tres"]
+    assert "res://data/unused.csv" not in ub
+
+
+def test_csharp_script(project):
+    b = project.scripts["res://scripts/csharp/Bullet.cs"]
+    assert b.lang == "csharp" and b.class_name == "Bullet" and b.is_global and b.is_tool
+    assert b.extends == "Area2D"
+    assert b.signals == ["Hit"] and b.emits == ["Hit"] and b.connects == ["BodyEntered", "Hit"]
+    assert b.loads == ["res://scenes/hud.tscn"] and b.refs == ["res://data/levels.json"]
+    assert b.funcs == ["_Ready", "OnBodyEntered", "OnHit"]
+    assert b.node_paths == ["%ScoreLabel"]
+    assert project.classes["Bullet"] == "res://scripts/csharp/Bullet.cs"
 
 
 def test_resource(project):

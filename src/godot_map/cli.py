@@ -3,8 +3,12 @@
     godot-map [ROOT]                write PROJECT_MAP.md and .godot-map/graph.json
     godot-map ROOT --check          exit 1 if the committed map is stale
     godot-map ROOT --stdout         print the Markdown instead of writing
-    godot-map ROOT --who res://scenes/hud.tscn
-                                    everything that references a path
+    godot-map ROOT --who scenes/hud.tscn
+    godot-map ROOT --who Enemy --depth 3
+                                    everything that references a path, class or autoload
+    godot-map ROOT --paths [scripts/hud.gd ...]
+                                    every $Node path in a script, checked against the
+                                    scenes the script is attached to; exit 1 if one is missing
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import os
 import sys
 
 from . import __version__
+from .query import check_node_paths, resolve_target, users_tree
 from .render import render_json, render_markdown
 from .scan import scan
 
@@ -39,7 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="exit 1 if the written map differs from a fresh one")
     ap.add_argument("--stdout", action="store_true", help="print the Markdown, write nothing")
     ap.add_argument("--no-trees", action="store_true", help="omit per-scene node trees from the Markdown")
-    ap.add_argument("--who", metavar="RES_PATH", help="list what references a res:// path and exit")
+    ap.add_argument("--mermaid", action="store_true", help="append a Mermaid scene-instance graph to the Markdown")
+    ap.add_argument("--who", metavar="TARGET", help="list what references a res:// path, class_name or autoload, and exit")
+    ap.add_argument("--depth", type=int, default=1, metavar="N", help="with --who: follow users N levels as an indented tree")
+    ap.add_argument("--paths", nargs="*", metavar="SCRIPT", help="check node paths in these scripts (all attached scripts if none) and exit")
     ap.add_argument("--version", action="version", version=f"godot-map {__version__}")
     args = ap.parse_args(argv)
 
@@ -50,13 +58,28 @@ def main(argv: list[str] | None = None) -> int:
     project = scan(root)
 
     if args.who:
-        target = args.who if args.who.startswith("res://") else "res://" + args.who.lstrip("./")
-        users = project.used_by.get(target, [])
-        for u in users:
-            print(u)
-        return 0 if users else 1
+        target = resolve_target(project, args.who)
+        lines = users_tree(project, target, depth=max(1, args.depth))
+        if args.depth > 1 and lines:
+            print(target)
+            lines = ["  " + ln for ln in lines]
+        for ln in lines:
+            print(ln)
+        return 0 if lines else 1
 
-    md = render_markdown(project, trees=not args.no_trees)
+    if args.paths is not None:
+        scripts = [resolve_target(project, s) for s in args.paths] or None
+        unknown = [s for s in scripts or [] if s not in project.scripts]
+        for s in unknown:
+            print(f"godot-map: no such script {s}", file=sys.stderr)
+        checked, missing, skipped = check_node_paths(project, scripts)
+        for m in missing:
+            print(m)
+        note = f", {skipped} built at runtime (skipped)" if skipped else ""
+        print(f"godot-map: {checked} node paths checked, {len(missing)} missing{note}")
+        return 1 if missing or unknown else 0
+
+    md = render_markdown(project, trees=not args.no_trees, mermaid=args.mermaid)
     js = render_json(project) if args.json else None
 
     if args.stdout:

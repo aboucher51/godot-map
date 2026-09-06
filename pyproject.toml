@@ -1,14 +1,22 @@
 [project]
 name = "godot-map"
-version = "0.1.0"
+version = "0.2.0"
 description = "Map a Godot 4 project's structure (scenes, scripts, autoloads, signals) into a Markdown summary and a JSON graph for AI coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = []
-
-[project.scripts]
-godot-map = "godot_map.cli:main"
+keywords = ["godot", "gdscript", "code-map", "ai-agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Documentation",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]

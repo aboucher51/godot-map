@@ -9,7 +9,14 @@ signal round_started(n: int)
 func _ready() -> void:
 	EventBus.score_changed.connect(_on_score_changed)
 	$Hud/StartButton.pressed.connect(_on_start_pressed)
-	get_node("Camera/Deep").name = "Deep"
+	get_node("Camera/Deep").visible = true
+	$Hud/ScoreLabel.text = "0"  # resolves through the instanced scene
+	$Hud/Nope.text = "0"  # does not
+	var box := VBoxContainer.new()
+	box.name = "MenuBox"  # so $MenuBox is built at runtime, not a missing path
+	add_child(box)
+	$MenuBox.visible = true
+	print("#not a comment", "res://data/levels.json")
 	GameManager.start()
 
 func _on_start_pressed() -> void:
