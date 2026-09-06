@@ -18,6 +18,10 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
 ]
 
+[project.urls]
+Homepage = "https://github.com/aboucher51/godot-map"
+Issues = "https://github.com/aboucher51/godot-map/issues"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
