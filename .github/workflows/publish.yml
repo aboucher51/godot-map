@@ -1,0 +1,55 @@
+# Publish to PyPI on a version tag (v0.2.0). Uses PyPI trusted publishing:
+# no token in secrets — PyPI accepts the OIDC identity of this workflow
+# run, once the project's "publishing" settings on pypi.org name this
+# repo, this file and the `pypi` environment.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --python 3.10 pytest -q
+      - run: uv run pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: tag must equal the version in pyproject.toml
+        run: |
+          VERSION="$(uv version --short)"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" != "$TAG" ]]; then
+            echo "pyproject.toml says $VERSION but the tag is v$TAG" >&2
+            exit 1
+          fi
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/godot-map
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
