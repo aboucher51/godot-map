@@ -19,9 +19,13 @@ _LOAD = re.compile(r'\b(?:preload|load)\(\s*"(res://[^"]+)"\s*\)')
 _RES_REF = re.compile(r'"(res://[^"\s]+)"')
 _SIGNAL = re.compile(r"^signal\s+([A-Za-z_]\w*)", re.M)
 _FUNC = re.compile(r"^(?:static\s+)?func\s+([A-Za-z_]\w*)", re.M)
-_EMIT = re.compile(r"\b([A-Za-z_][\w.]*)\.emit\(")
+# `X.sig.emit(` / `X.sig.connect(`. When the object is a call result or a
+# subscript (`get_viewport().size_changed.connect(`) the object is unknown
+# and the target is recorded as `?.size_changed`, never as a bare own signal.
+_EMIT = re.compile(r"(?:([\)\]])\.)?\b([A-Za-z_][\w.]*)\.emit\(")
 _EMIT_SIGNAL = re.compile(r'\bemit_signal\(\s*"([A-Za-z_]\w*)"')
-_CONNECT = re.compile(r"\b([A-Za-z_][\w.]*)\.connect\(")
+_CONNECT = re.compile(r"(?:([\)\]])\.)?\b([A-Za-z_][\w.]*)\.connect\(")
+_VAR = re.compile(r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:var|const)\s+([A-Za-z_]\w*)", re.M)
 # Node paths relative to the script's own node: $Foo/Bar, $"Foo Bar/Baz",
 # %Unique (PascalCase, so "%s" and a % b stay out), get_node("Foo/Bar") and
 # self.get_node("%Unique"). `other.get_node("X")` is relative to `other`
@@ -29,6 +33,8 @@ _CONNECT = re.compile(r"\b([A-Za-z_][\w.]*)\.connect\(")
 _NODE_PATH_QUOTED = re.compile(r'\$"([^"]+)"|(?:(?<![.\w])|\bself\.)get_node\(\s*"([^"]+)"')
 _NODE_PATH_BARE = re.compile(r'\$([\w/%]+)|(?<![\w"%])(%[A-Z]\w*(?:/[\w%]+)*)')
 _NAMED = re.compile(r'\.name\s*=\s*"([^"/]+)"')  # box.name = "MenuBox": a node built at runtime
+_GROUP_JOIN = re.compile(r'\badd_to_group\(\s*&?"([^"]+)"')
+_GROUP_QUERY = re.compile(r'\b(?:get_nodes_in_group|call_group|call_group_flags|is_in_group|get_first_node_in_group|has_group)\(\s*(?:\d+\s*,\s*)?&?"([^"]+)"')
 _STRING = re.compile(r'"""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
 _COMMENT_OR_STRING = re.compile(f"({_STRING.pattern})|#[^\\n]*")
 
@@ -60,8 +66,11 @@ class ScriptInfo:
     connects: list[str] = field(default_factory=list)  # "EventBus.saved" or "button.pressed"
     node_paths: list[str] = field(default_factory=list)  # $Foo/Bar, %Unique, get_node("..")
     lines: int = 0
+    groups_joined: list[str] = field(default_factory=list)  # add_to_group("x")
+    groups_queried: list[str] = field(default_factory=list)  # get_nodes_in_group("x"), call_group, is_in_group
     idents: set[str] = field(default_factory=set)  # every identifier outside strings/comments
     named_nodes: set[str] = field(default_factory=set)  # x.name = "Foo": nodes this script builds
+    vars: set[str] = field(default_factory=set)  # var/const names, so a Signal variable's .emit( is not an own signal
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +87,8 @@ class ScriptInfo:
             "emits": self.emits,
             "connects": self.connects,
             "node_paths": self.node_paths,
+            "groups_joined": self.groups_joined,
+            "groups_queried": self.groups_queried,
             "lines": self.lines,
         }
 
@@ -110,12 +121,20 @@ def scan_source(res_path: str, source: str) -> ScriptInfo:
     info.refs = _uniq(p for p in _RES_REF.findall(code) if p not in info.loads)
     info.signals = _uniq(_SIGNAL.findall(code))
     info.funcs = _uniq(_FUNC.findall(code))
-    info.emits = _uniq(_EMIT.findall(code) + _EMIT_SIGNAL.findall(code))
-    info.connects = _uniq(_CONNECT.findall(code))
+    info.emits = _uniq([_target(m) for m in _EMIT.findall(code)] + _EMIT_SIGNAL.findall(code))
+    info.connects = _uniq(_target(m) for m in _CONNECT.findall(code))
     info.node_paths = node_paths(code)
+    info.groups_joined = _uniq(_GROUP_JOIN.findall(code))
+    info.groups_queried = _uniq(_GROUP_QUERY.findall(code))
     info.idents = set(_IDENT.findall(blank_strings(code)))
     info.named_nodes = set(_NAMED.findall(code))
+    info.vars = set(_VAR.findall(code))
     return info
+
+
+def _target(m: tuple[str, str]) -> str:
+    closer, name = m
+    return f"?.{name}" if closer else name
 
 
 def scan_file(res_path: str, fs_path: str) -> ScriptInfo:

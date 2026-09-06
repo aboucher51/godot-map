@@ -18,9 +18,11 @@ metadata/_edit_lock_ = true
 
 [node name="Camera" type="Camera2D" parent="."]
 limit_left = 0
+target = NodePath("../Sprite")
 zoom = Vector2(2, 2)
 
 [node name="Deep" type="Node" parent="Camera"]
+follow = NodePath("Nowhere")
 list = Array[int]([1,
 2,
 3])

@@ -1,6 +1,6 @@
 [project]
 name = "godot-map"
-version = "0.2.1"
+version = "0.3.0"
 description = "Map a Godot 4 project's structure (scenes, scripts, autoloads, signals) into a Markdown summary and a JSON graph for AI coding agents."
 readme = "README.md"
 requires-python = ">=3.10"

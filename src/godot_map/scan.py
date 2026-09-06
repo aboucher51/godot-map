@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from . import csharp, gdscript, tscn
@@ -12,6 +13,8 @@ SKIP_DIRS = {
     "bin", "obj", ".mono",
 }
 DATA_EXTS = (".json", ".csv", ".gdshader")
+_NODEPATH_PROP = re.compile(r'^NodePath\("([^"]*)"\)$')
+_TEMPLATE = re.compile(r"%[sd]|\{[^}]*\}")
 
 
 @dataclass
@@ -23,6 +26,7 @@ class NodeInfo:
     instance: str | None = None  # res:// path of the instanced scene
     groups: list[str] = field(default_factory=list)
     unique: bool = False  # unique_name_in_owner, reachable as %Name
+    node_paths: list[str] = field(default_factory=list)  # NodePath("…") property values set in the scene
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +37,7 @@ class NodeInfo:
             "instance": self.instance,
             "groups": self.groups,
             "unique": self.unique,
+            "node_paths": self.node_paths,
         }
 
 
@@ -113,6 +118,19 @@ class Project:
     # derived
     used_by: dict[str, list[str]] = field(default_factory=dict)  # res:// -> [res:// or "autoload:Name"]
     classes: dict[str, str] = field(default_factory=dict)  # class_name -> res://
+    groups: dict[str, dict] = field(default_factory=dict)  # group -> {scenes: {scene: [nodes]}, joined_in, queried_in}
+
+    def chain(self, path: str | None) -> list:
+        """A script and its ancestors, as far as the project's own scripts reach."""
+        out: list = []
+        seen: set[str] = set()
+        while path and path in self.scripts and path not in seen:
+            seen.add(path)
+            script = self.scripts[path]
+            out.append(script)
+            ext = script.extends
+            path = ext if ext and ext.startswith("res://") else self.classes.get(ext or "")
+        return out
 
     def to_dict(self) -> dict:
         return {
@@ -125,6 +143,7 @@ class Project:
             "resources": {k: v.to_dict() for k, v in sorted(self.resources.items())},
             "data": {k: {"used_by": sorted(self.used_by.get(k, []))} for k in sorted(self.data)},
             "classes": dict(sorted(self.classes.items())),
+            "groups": {k: v for k, v in sorted(self.groups.items())},
             "used_by": {k: sorted(v) for k, v in sorted(self.used_by.items())},
         }
 
@@ -202,6 +221,10 @@ def _read_scene(project: Project, res_path: str, fs_path: str) -> SceneInfo:
             if isinstance(groups, list):
                 node.groups = groups
             node.unique = sec.props.get("unique_name_in_owner", "").strip() == "true"
+            for raw in sec.props.values():
+                m = _NODEPATH_PROP.match(raw.strip())
+                if m and m.group(1):
+                    node.node_paths.append(m.group(1))
             scene.nodes.append(node)
             if parent is None:
                 scene.root = node
@@ -268,12 +291,20 @@ def _derive(project: Project) -> None:
             use(i, scene.path)
         for r in scene.resources:
             use(r, scene.path)
+    all_paths = sorted(set(project.scenes) | set(project.scripts) | set(project.resources) | set(project.data))
     for script in project.scripts.values():
         if script.class_name:
             project.classes[script.class_name] = script.path
         for target in script.loads + script.refs:
             if target != script.path:
                 use(target, script.path)
+            # "res://data/" + id + ".json" and "res://data/%s.json": the
+            # literal names a directory, so every file under it is a use.
+            prefix, suffix = _built_path(target)
+            if prefix is not None:
+                for path in all_paths:
+                    if path != script.path and path.startswith(prefix) and path.endswith(suffix):
+                        use(path, script.path)
         if script.extends and script.extends.startswith("res://"):
             use(script.extends, script.path)
     for res in project.resources.values():
@@ -291,6 +322,35 @@ def _derive(project: Project) -> None:
                 use(target, script.path)
     for users in project.used_by.values():
         users.sort()
+    # Groups: membership from scenes, add_to_group and queries from code.
+    def group(name: str) -> dict:
+        return project.groups.setdefault(name, {"scenes": {}, "joined_in": [], "queried_in": []})
+
+    for spath, scene in sorted(project.scenes.items()):
+        for node in scene.nodes:
+            for g in node.groups:
+                group(g)["scenes"].setdefault(spath, []).append(node.path)
+    for spath, script in sorted(project.scripts.items()):
+        for g in script.groups_joined:
+            group(g)["joined_in"].append(spath)
+        for g in script.groups_queried:
+            group(g)["queried_in"].append(spath)
+
+
+def _built_path(literal: str) -> tuple[str | None, str]:
+    """('res://data/', '.json') for a literal that names a directory or a
+    template; (None, '') for a plain file path."""
+    if literal.endswith("/"):
+        return (literal, "") if len(literal) > len("res://") else (None, "")
+    parts = _TEMPLATE.split(literal)
+    if len(parts) > 1 and "/" in parts[0]:
+        return parts[0][: parts[0].rfind("/") + 1], parts[-1]
+    # "res://data/battle": no extension on the last segment, so a directory
+    # joined at runtime (path_join, + "/" + name).
+    last = literal.rsplit("/", 1)[-1]
+    if len(parts) == 1 and last and "." not in last:
+        return literal + "/", ""
+    return None, ""
 
 
 def scan(root: str) -> Project:

@@ -12,7 +12,7 @@ def test_markdown_sections():
     md = render_markdown(scan(FIXTURE))
     assert md.startswith("# Project map: Mini\n")
     for heading in ("## Autoloads", "## Signal wiring", "## Scenes", "## class_name index",
-                    "## Scripts nothing references", "## Scripts", "## Data files"):
+                    "## Scripts nothing references", "## Groups", "## Scripts", "## Data files", "## Problems"):
         assert heading in md, heading
     assert "## Scene graph" not in md
     assert "| EventBus.score_changed | `scripts/autoloads/event_bus.gd` | `scripts/main.gd` | `scripts/main.gd` | — |" in md
@@ -21,6 +21,10 @@ def test_markdown_sections():
     assert "| round_started |" not in md  # emitted only by its declarer, no listener
     assert "| `scripts/actor.gd` | CharacterBody2D | Actor | resources/stats.tres, scripts/csharp/Bullet.cs, scripts/enemy.gd, scripts/hud.gd |" in md
     assert "3 `.json`/`.csv`/`.gdshader` files" in md and "`data/` (1)" in md
+    assert "- `scripts/orphan.gd` (only 1 test script)" in md
+    assert "| `scripts/orphan.gd` | Node |  | 1 test | 0 | 1 |" in md
+    assert "| state | `scenes/main.tscn`: . | — | scripts/hud.gd, scripts/main.gd |" in md
+    assert "- `scripts/orphan.gd`: connects to nope, which EventBus (scripts/autoloads/event_bus.gd) does not declare" in md
     assert "- `Hud/StartButton` pressed → `.`._on_start_pressed()" in md
     assert "  Hud  ← scenes/hud.tscn" in md
     assert "- `scripts/orphan.gd`" in md
@@ -98,7 +102,8 @@ def test_cli_paths(capsys):
     assert out == [
         "res://scripts/hud.gd: Missing not in res://scenes/hud.tscn (attached at .)",
         "res://scripts/main.gd: Hud/Nope not in res://scenes/main.tscn (attached at .)",
-        "godot-map: 7 node paths checked, 2 missing, 1 built at runtime (skipped)",
+        'res://scenes/main.tscn: NodePath("Nowhere") not in res://scenes/main.tscn (attached at Camera/Deep)',
+        "godot-map: 9 node paths checked, 3 missing, 1 built at runtime (skipped)",
     ]
     assert main([FIXTURE, "--paths", "scripts/hud.gd"]) == 1
     assert capsys.readouterr().out.splitlines()[-1] == "godot-map: 3 node paths checked, 1 missing"
@@ -108,3 +113,40 @@ def test_cli_paths(capsys):
 
 def test_cli_no_project(tmp_path):
     assert main([str(tmp_path)]) == 2
+
+
+def test_cli_problems(capsys):
+    assert main([FIXTURE, "--problems"]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "res://scenes/hud.tscn: ext_resource Texture2D res://art/missing.png is not on disk",
+        "res://scripts/orphan.gd: load res://scripts/gone.gd is not on disk",
+        "res://scripts/orphan.gd: emits undeclared, which this script does not declare",
+        "res://scripts/orphan.gd: connects to nope, which EventBus (scripts/autoloads/event_bus.gd) does not declare",
+        "res://scenes/main.tscn: [connection] died → Hud._on_died(): scripts/hud.gd has no such func",
+        "godot-map: 5 problems",
+    ]
+
+
+def test_cli_who_signal(capsys):
+    assert main([FIXTURE, "--who", "EventBus.score_changed"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["emit: res://scripts/main.gd", "connect: res://scripts/main.gd"]
+    assert main([FIXTURE, "--who", "Actor.died"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "emit: res://scripts/enemy.gd", "scene: `scenes/main.tscn`: Hud → Hud._on_died"]
+    assert main([FIXTURE, "--who", "EventBus.nothing"]) == 1
+
+
+def test_cli_who_changed(tmp_path, capsys):
+    import subprocess
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURE, root)
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "init"], check=True)
+    assert main([str(root), "--who", "--changed"]) == 0
+    assert "nothing changed" in capsys.readouterr().out
+    (root / "scripts" / "hud.gd").write_text("extends CanvasLayer\n")  # class_name Hud gone: main.gd no longer names it
+    (root / "scripts" / "new.gd").write_text("extends Node\n")  # untracked, referenced by nothing
+    assert main([str(root), "--who", "--changed"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["res://scripts/hud.gd", "  res://scenes/hud.tscn"]

@@ -79,10 +79,10 @@ def test_classes_and_used_by(project):
     assert ub["res://scenes/hud.tscn"] == ["res://scenes/main.tscn", "res://scripts/csharp/Bullet.cs", "res://scripts/main.gd"]
     # naming an autoload or a class_name in code is a use of its script
     assert ub["res://scripts/autoloads/event_bus.gd"] == [
-        "autoload:EventBus", "res://scripts/autoloads/game_manager.gd", "res://scripts/main.gd"]
+        "autoload:EventBus", "res://scripts/autoloads/game_manager.gd", "res://scripts/main.gd", "res://scripts/orphan.gd"]
     assert ub["res://scripts/actor.gd"] == [
         "res://resources/stats.tres", "res://scripts/csharp/Bullet.cs", "res://scripts/enemy.gd", "res://scripts/hud.gd"]
-    assert "res://scripts/orphan.gd" not in ub
+    assert ub["res://scripts/orphan.gd"] == ["res://tests/test_enemy.gd"]  # a test-only reference
 
 
 def test_unique_names_and_node_paths(project):
@@ -95,7 +95,9 @@ def test_unique_names_and_node_paths(project):
 def test_data_files(project):
     assert project.data == ["res://data/levels.json", "res://data/unused.csv", "res://shaders/glow.gdshader"]
     ub = project.used_by
-    assert ub["res://data/levels.json"] == ["res://scripts/csharp/Bullet.cs", "res://scripts/main.gd"]
+    # game_manager.gd names "res://data/%s.json": a built path, so every data/*.json is a use
+    assert ub["res://data/levels.json"] == [
+        "res://scripts/autoloads/game_manager.gd", "res://scripts/csharp/Bullet.cs", "res://scripts/main.gd"]
     assert ub["res://shaders/glow.gdshader"] == ["res://resources/glow_material.tres"]
     assert "res://data/unused.csv" not in ub
 
@@ -115,3 +117,51 @@ def test_resource(project):
     res = project.resources["res://resources/stats.tres"]
     assert res.type == "Resource" and res.script == "res://scripts/actor.gd"
     assert project.resources["res://default_bus_layout.tres"].type == "AudioBusLayout"
+
+
+def test_built_paths():
+    from godot_map.scan import _built_path
+    assert _built_path("res://data/") == ("res://data/", "")
+    assert _built_path("res://data/%s.json") == ("res://data/", ".json")
+    assert _built_path("res://data/{id}/stats.tres") == ("res://data/", "/stats.tres")
+    assert _built_path("res://data/battle") == ("res://data/battle/", "")  # joined at runtime
+    assert _built_path("res://") == (None, "")  # the whole project is not a use
+    assert _built_path("res://data/levels.json") == (None, "")
+
+
+def test_groups(project):
+    assert project.groups["state"] == {
+        "scenes": {"res://scenes/main.tscn": ["."]},
+        "joined_in": [],
+        "queried_in": ["res://scripts/hud.gd", "res://scripts/main.gd"],
+    }
+    assert project.groups["runtime"]["joined_in"] == ["res://scripts/main.gd"]
+
+
+def test_nodepath_properties(project):
+    by_path = {n.path: n for n in project.scenes["res://scenes/main.tscn"].nodes}
+    assert by_path["Camera"].node_paths == ["../Sprite"]
+    assert by_path["Camera/Deep"].node_paths == ["Nowhere"]
+
+
+def test_chain(project):
+    assert [s.path for s in project.chain("res://scripts/enemy.gd")] == [
+        "res://scripts/enemy.gd", "res://scripts/actor.gd"]
+
+
+def test_signal_problems_edge_cases(tmp_path):
+    import shutil
+    from godot_map.query import problems
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURE, root)
+    (root / "scripts" / "edge.gd").write_text("""extends Node
+var _sig: Signal
+func _ready():
+	EventBus.connect("score_changed", _go)  # Object.connect on an autoload: not a signal named EventBus
+	_sig.emit()  # a Signal variable
+	get_viewport().size_changed.connect(_go)  # unknown object
+	var s = load("res://addons/optional/thing.gd")  # optional addon: not judged
+func _go(): pass
+""")
+    found = [str(pr) for pr in problems(scan(str(root))) if "edge.gd" in str(pr)]
+    assert found == []

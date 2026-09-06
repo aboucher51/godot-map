@@ -55,3 +55,20 @@ public partial class Foo : Node2D // trailing
     assert i.connects == ["Scored", "Bus.Scored"] and i.emits == ["hud.Refresh"]
     assert i.node_paths == ["Y/Z"] and i.funcs == ["_Ready", "OnScored"]
     assert "Nope" not in i.idents and "PackedScene" in i.idents
+
+
+def test_connect_on_a_call_result_is_not_an_own_signal():
+    info = gdscript.scan_source("res://x.gd", """
+signal died
+var _resolver: Signal
+func _ready():
+	get_viewport().size_changed.connect(_on_resize)
+	$Button.pressed.connect(_go)
+	EventBus.saved.connect(_go)
+	died.emit()
+	_resolver.emit(1)
+	items[0].changed.connect(_go)
+""")
+    assert info.connects == ["?.size_changed", "Button.pressed", "EventBus.saved", "?.changed"]
+    assert info.emits == ["died", "_resolver"]
+    assert info.vars == {"_resolver"}

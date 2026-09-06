@@ -72,18 +72,44 @@ same day; the list below is what came of it.
 - **Publish prerequisites**: `uv.lock` tracked, `[project.urls]` and
   classifiers, version 0.2.0, `uv build` clean.
 
+## Landed 2026-09-05, third pass (0.3.0)
+
+- **Problems**: `--problems` and a Markdown section. Every `res://`
+  reference the map holds checked against disk (ext_resources, loads,
+  literals, autoloads, main scene, `extends "res://…"`); emits and connects
+  on a signal the target does not declare (autoloads and classes by
+  name, own signals, with an engine-signal list in `query.py`); scene
+  `[connection]`s to a method the target script lacks. Zero false
+  positives on the twelve siblings after four rules: `obj().sig.connect`
+  is an unknown object, a `var` holding a Signal is not an own signal,
+  `Autoload.connect(name, callable)` is the Object API, and literals in
+  tests or under `addons/` are not judged.
+- **Built data paths**: a literal naming a directory (`"res://data/"`,
+  or `"res://data/battle"` with no extension, joined at runtime) or a
+  template (`"res://data/%s.json"`) is a use of every matching file.
+  Monmon's "named by nothing" data files fell from 306 of 313 to 7.
+- **Groups**: scene membership, `add_to_group`, and the group queries in
+  one table; `groups` in the JSON.
+- **`--who --changed`**: users of every file git sees as modified or
+  untracked. **`--who Autoload.signal`** and `Class.signal`: emitters,
+  code listeners, scene wiring.
+- **Tests counted, not listed** in "used by"; a script only tests
+  reference is listed as such under "Scripts nothing references".
+- **Exported NodePaths** set in scenes join the `--paths` check.
+
 ## Next
 
-1. **Publish** to PyPI (`uv publish`, needs a token). Everything before
-   it is done; the README's "once published" install line then holds.
-2. **Maps in the game projects.** Kombucha and Template carry one; each
+1. **Maps in the game projects.** Kombucha and Template carry one; each
    game adopts it by running `godot-map .` once and committing both
    files, after which `check.sh` keeps it fresh.
+2. **`--problems` in `check.sh`**: a gate beside the map gate, once a few
+   projects have run it and the engine-signal list has settled.
 3. **`sync-tooling.sh --check`** noting when a project's
-   `.claude/settings.json` lacks the hook from `claude-hooks.json`, the
-   treatment Kombucha's fast-feedback plan gives the lint hook.
-4. **Exported NodePaths**: `@export var target: NodePath` set in a scene
-   is a path the map could check too; today only literals in scripts are.
+   `.claude/settings.json` lacks the hook from `claude-hooks.json`.
+4. **Engine class list** for `extends`: today `extends Foo` where `Foo`
+   is neither a class_name nor an engine class is not reported, because
+   the map has no engine class list. A generated list per Godot minor
+   would close it, at the cost of tracking versions.
 
 ## Not planned
 

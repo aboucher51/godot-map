@@ -18,6 +18,9 @@ func _ready() -> void:
 	$MenuBox.visible = true
 	print("#not a comment", "res://data/levels.json")
 	GameManager.start()
+	add_to_group("runtime")
+	for n in get_tree().get_nodes_in_group("state"):
+		n.set_process(true)
 
 func _on_start_pressed() -> void:
 	round_started.emit(1)

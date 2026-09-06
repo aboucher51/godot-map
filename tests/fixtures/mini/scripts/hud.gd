@@ -8,3 +8,4 @@ func _on_score_changed(score: int) -> void:
 	%ScoreLabel.visible = true
 	$Missing.hide()  # deliberately absent from hud.tscn: --paths must report it
 	print("%s scored %d" % [name, score])
+	get_tree().call_group("state", "reset")

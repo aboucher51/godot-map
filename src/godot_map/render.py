@@ -13,9 +13,11 @@ import json
 import os
 import re
 
+from .query import problems
 from .scan import Project
 
 _MAX_USERS = 6  # "used by" cells longer than this show a count
+_MAX_PROBLEMS = 30
 
 
 def _short(path: str) -> str:
@@ -45,10 +47,19 @@ def _tree(project: Project, path: str) -> str:
     return "\n".join(lines)
 
 
+def _is_test(path: str) -> bool:
+    return path.startswith("res://tests/") or path.startswith("res://test/")
+
+
 def _users_cell(users: list[str]) -> str:
-    shown = [u.split(":", 1)[1] if u.startswith("autoload:") else _short(u) for u in users]
+    """Users as a short cell: tests are counted, not listed, so they do not crowd out the real ones."""
+    real = [u for u in users if not _is_test(u)]
+    tests = len(users) - len(real)
+    shown = [u.split(":", 1)[1] if u.startswith("autoload:") else _short(u) for u in real]
     if len(shown) > _MAX_USERS:
-        return ", ".join(shown[: _MAX_USERS - 2]) + f", +{len(shown) - _MAX_USERS + 2} more"
+        shown = shown[: _MAX_USERS - 2] + [f"+{len(shown) - _MAX_USERS + 2} more"]
+    if tests:
+        shown.append(f"{tests} test{'s' if tests > 1 else ''}")
     return ", ".join(shown)
 
 
@@ -122,7 +133,7 @@ def render_markdown(
                 facts.append("instances: " + ", ".join(_link(s) for s in scene.instances))
             users = [u for u in project.used_by.get(path, []) if not u.startswith("autoload:")]
             if users:
-                facts.append("used by: " + ", ".join(_link(u) for u in users))
+                facts.append("used by: " + _users_cell(users))
             out.append("; ".join(facts) + ".")
             if scene.connections:
                 out.append("")
@@ -152,13 +163,32 @@ def render_markdown(
     loose = [
         p
         for p, s in sorted(project.scripts.items())
-        if p not in project.used_by and not s.class_name and not p.startswith("res://tests/")
+        if not s.class_name and not _is_test(p)
+        and all(_is_test(u) for u in project.used_by.get(p, []))
     ]
     if loose:
         out.append("## Scripts nothing references\n")
-        out.append("No scene attaches them, no autoload names them, no script loads or extends them, and they declare no class_name. Entry points, dead code, or loaded by a path built at runtime.\n")
+        out.append("No scene attaches them, no autoload names them, no script loads, extends or names them, and they declare no class_name. Entry points, dead code, or loaded by a path built at runtime.\n")
         for p in loose:
-            out.append(f"- {_link(p)}")
+            tests = len(project.used_by.get(p, []))
+            out.append(f"- {_link(p)}" + (f" (only {tests} test script{'s' if tests > 1 else ''})" if tests else ""))
+        out.append("")
+
+    # Groups
+    if project.groups:
+        out.append("## Groups\n")
+        out.append("Membership from scenes and `add_to_group`; queries are `get_nodes_in_group`, `call_group`, `is_in_group`.\n")
+        out.append("| Group | In scenes | Joined in code | Queried in code |")
+        out.append("|---|---|---|---|")
+        for name, g in sorted(project.groups.items()):
+            scenes = []
+            for spath, nodes in sorted(g["scenes"].items()):
+                names = nodes if len(nodes) <= 3 else nodes[:2] + [f"+{len(nodes) - 2}"]
+                scenes.append(f"`{_short(spath)}`: {', '.join(names)}")
+            out.append(
+                f"| {name} | {'; '.join(scenes) or '—'} | {_users_cell(g['joined_in']) or '—'} | "
+                f"{_users_cell(g['queried_in']) or '—'} |"
+            )
         out.append("")
 
     # Scripts index (compact); test scripts are counted, not listed
@@ -166,7 +196,7 @@ def render_markdown(
     if project.scripts:
         out.append("## Scripts\n")
         if tests:
-            out.append(f"{len(tests)} test scripts under `tests/` are not listed.\n")
+            out.append(f"{len(tests)} test script{'s' if len(tests) > 1 else ''} under `tests/` {'are' if len(tests) > 1 else 'is'} not listed.\n")
         out.append("| Script | extends | class_name | attached in / used by | signals | funcs |")
         out.append("|---|---|---|---|---|---|")
         for path, s in sorted(project.scripts.items()):
@@ -196,6 +226,17 @@ def render_markdown(
                 f"`{d}` ({n})" for d, n in sorted(loose_dirs.items())
             ) + "."
         out.append(line)
+        out.append("")
+
+    # Problems: what the engine would report on load, found statically.
+    found = problems(project)
+    if found:
+        out.append("## Problems\n")
+        out.append("Found by `godot-map . --problems`: `res://` references that name nothing on disk, signals emitted or connected that the target does not declare, scene connections to a method the script lacks.\n")
+        for pr in found[:_MAX_PROBLEMS]:
+            out.append(f"- `{_short(pr.source)}`: {pr.detail}")
+        if len(found) > _MAX_PROBLEMS:
+            out.append(f"- ... {len(found) - _MAX_PROBLEMS} more")
         out.append("")
 
     if mermaid and project.scenes:
@@ -228,7 +269,7 @@ def _mermaid(project: Project) -> list[str]:
     return lines
 
 
-def signal_wiring(project: Project) -> list[dict]:
+def signal_wiring(project: Project, *, all_rows: bool = False) -> list[dict]:
     """One row per declared signal that something emits or listens to.
 
     Autoload signals are keyed ``Autoload.sig`` and matched on that exact
@@ -279,7 +320,7 @@ def signal_wiring(project: Project) -> list[dict]:
     # already in the class index; it earns no row here.
     return [
         r for _, r in sorted(rows.items())
-        if r["connected_in_code"] or r["connected_in_scenes"]
+        if all_rows or r["connected_in_code"] or r["connected_in_scenes"]
         or any(e not in r["declared_in"] for e in r["emitted_in"])
     ]
 
