@@ -34,6 +34,10 @@ jobs:
             exit 1
           fi
       - run: uv build
+      - name: the wheel must install a working godot-map command
+        run: |
+          uvx --from dist/godot_map-*.whl godot-map --version
+          uvx --from dist/godot_map-*.whl godot-map tests/fixtures/mini --stdout | head -1
       - uses: actions/upload-artifact@v4
         with:
           name: dist
