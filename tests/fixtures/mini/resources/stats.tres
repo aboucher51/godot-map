@@ -1,0 +1,7 @@
+[gd_resource type="Resource" script_class="Actor" load_steps=2 format=3 uid="uid://r1stats000001"]
+
+[ext_resource type="Script" path="res://scripts/actor.gd" id="1_actor"]
+
+[resource]
+script = ExtResource("1_actor")
+speed = 3.5

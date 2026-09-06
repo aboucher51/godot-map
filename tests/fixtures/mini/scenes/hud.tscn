@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://c2hud00000001"]
+
+[ext_resource type="Script" path="res://scripts/hud.gd" id="1"]
+
+[node name="Hud" type="CanvasLayer"]
+script = ExtResource("1")
+
+[node name="StartButton" type="Button" parent="."]
+text = "Start"
+
+[node name="ScoreLabel" type="Label" parent="."]
+text = "0"

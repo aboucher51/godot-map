@@ -1,0 +1,4 @@
+class_name Actor
+extends CharacterBody2D
+
+signal died

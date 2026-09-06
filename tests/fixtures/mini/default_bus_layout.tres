@@ -1,0 +1,6 @@
+[gd_resource type="AudioBusLayout" format=3]
+
+[resource]
+bus/1/name = &"Music"
+bus/1/solo = false
+bus/1/send = &"Master"
