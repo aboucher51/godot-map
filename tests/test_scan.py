@@ -165,3 +165,35 @@ func _go(): pass
 """)
     found = [str(pr) for pr in problems(scan(str(root))) if "edge.gd" in str(pr)]
     assert found == []
+
+
+def test_skips_git_ignored_files(tmp_path):
+    """A git-ignored file is one checkout's (imported art packs), so the
+    committed map must not change when it is there."""
+    import shutil
+    import subprocess
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURE, root)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / ".gitignore").write_text("assets/packs/*\n!assets/packs/README.md\nlocal.json\n")
+    packs = root / "assets" / "packs"
+    packs.mkdir(parents=True)
+    (packs / "manifest.json").write_text("{}")
+    (packs / "README.md").write_text("kept")
+    (root / "local.json").write_text("{}")
+    (root / "kept.json").write_text("{}")
+    data = scan(str(root)).data
+    assert "res://assets/packs/manifest.json" not in data
+    assert "res://local.json" not in data
+    assert "res://kept.json" in data
+
+
+def test_without_git_nothing_is_ignored(tmp_path):
+    import shutil
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURE, root)
+    (root / ".gitignore").write_text("extra.json\n")
+    (root / "extra.json").write_text("{}")
+    env_root = str(root)
+    # tmp_path is outside any repo, so .gitignore has no say.
+    assert "res://extra.json" in scan(env_root).data

@@ -117,3 +117,12 @@ same day; the list below is what came of it.
   harness cover that side.
 - A full GDScript parser. The facts the map needs are declarations at the
   start of a line; the cost of correctness beyond that is a grammar.
+
+## Landed 2026-10-24 (0.3.1)
+
+- **Git-ignored files are not mapped.** The walk asks
+  `git ls-files --others --ignored --exclude-standard --directory` once and
+  skips what it lists; outside a repo nothing is skipped. IceEngine's art
+  packs (`assets/quaternius/`, git-ignored, imported on one machine) added
+  seven data files to the map there, so `--check` read stale in that
+  checkout and fresh everywhere else.

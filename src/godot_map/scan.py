@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 
 from . import csharp, gdscript, tscn
@@ -158,11 +159,36 @@ def _uniq(items):
     return out
 
 
+def _git_ignored(root: str) -> set[str]:
+    """Paths under ROOT that git ignores, relative and with "/" separators.
+
+    A git-ignored file is local to one checkout (imported art, a build), so
+    counting it would make the committed map stale on every machine that
+    has it. Outside a git repo, or without git, nothing is ignored."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "ls-files", "--others", "--ignored", "--exclude-standard",
+             "--directory", "-z"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    # "./" would mean the whole project is ignored; mapping nothing helps nobody.
+    return {p.rstrip("/") for p in out.split("\0") if p.rstrip("/") not in ("", ".")}
+
+
 def _walk(root: str):
+    ignored = _git_ignored(root)
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith("."))
+        rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        prefix = "" if rel == "." else rel + "/"
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in SKIP_DIRS and not d.startswith(".") and prefix + d not in ignored
+        )
         for fn in sorted(filenames):
-            yield os.path.join(dirpath, fn)
+            if prefix + fn not in ignored:
+                yield os.path.join(dirpath, fn)
 
 
 def _res(root: str, fs_path: str) -> str:
