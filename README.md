@@ -2,11 +2,11 @@
 
 A structural map of a Godot 4 project, for coding agents and for you.
 
-Godot keeps a project's shape in files no code-graph tool reads: `.tscn`
-scenes carry the node trees, script attachments, instanced scenes and
-signal connections; `project.godot` carries the autoloads. `godot-map`
-reads those plus the declarations in every `.gd` and `.cs` and writes two
-things:
+Godot keeps a project's shape in files that no code-graph tool reads.
+`.tscn` scenes hold the node trees, script attachments, instanced scenes
+and signal connections. `project.godot` holds the autoloads. `godot-map`
+reads those files and the declarations in every `.gd` and `.cs`. Then it
+writes two files:
 
 - **`PROJECT_MAP.md`** — the always-read tier. Autoloads and their
   signals, every declared signal with who emits it and who listens (in
@@ -20,9 +20,9 @@ things:
   and data file, plus a reverse index (`used_by`) from any `res://` path to
   everything that references it.
 
-No engine, no LSP, no dependencies: it is a few hundred lines of Python
-over the text formats, and it never rejects a file it does not fully
-understand.
+The tool needs no engine, no LSP and no dependencies. It is a few hundred
+lines of Python that read the text formats. It never rejects a file, even
+one it does not fully understand.
 
 ## Install
 
@@ -50,10 +50,10 @@ godot-map . --no-trees             # smaller Markdown, no per-scene node trees
 godot-map . --mermaid              # append a Mermaid scene-instance graph (off by default)
 ```
 
-Commit both outputs. A checkout then reads without the tool installed, and
-`--check` in CI catches a map that fell behind the scenes. `--check`
-compares against the same flags you pass it, so a project that commits
-with `--mermaid` checks with `--mermaid`.
+Commit both outputs. Then anyone can read the map in a checkout without the tool
+installed. `--check` in CI catches a map that fell behind the scenes.
+`--check` compares against the same flags you pass it. So a project that
+commits with `--mermaid` must check with `--mermaid`.
 
 ## What it reads
 
@@ -70,10 +70,11 @@ with `--mermaid` checks with `--mermaid`.
 A script is *used by* whatever attaches, autoloads, loads or extends it,
 and by every script that names its `class_name` or autoload name in code
 (`Enemy.new()`, a static call, a type hint). That last rule is where most
-uses live in a project that builds its UI in code. A literal that names a
-directory or a template (`"res://data/"`, `"res://data/%s.json"`) is a
-use of every matching file under it, so data loaded by a built path is
-still attributed. Test scripts are counted, not listed, in "used by".
+uses live in a project that builds its UI in code. A literal can name a
+directory or a template (`"res://data/"`, `"res://data/%s.json"`). The
+tool counts it as a use of every matching file under it. So "used by"
+still shows data that a script loads from a built path. "Used by" counts
+test scripts but does not list them.
 
 Skipped: `.godot/`, `addons/`, `builds/`, `shots/`, `bin/`, `obj/`, dot-directories.
 
@@ -90,15 +91,21 @@ never goes stale mid-task; Kombucha ships one as `tools/seeds/claude-hooks.json`
 
 ## Limits
 
-The GDScript and C# passes are regex, not parsers: a string literal that
-looks like a declaration, or a `preload` built from a variable, will be
-missed or misread. Scenes are read at the section level, so a property
-value in a shape the reader does not know is kept verbatim and ignored.
-`--paths` checks only paths relative to the script's own node
-(`other.get_node("X")` is skipped) and skips paths through a node the
-script names itself; a node added at runtime some other way is reported as
-missing. `--problems` knows the engine's signals from a list in
-`query.py`, not from the engine: an engine signal the list lacks is
-reported as undeclared, and the fix is one line there. Literals in test
-scripts and under `addons/` are not checked for existence. The map is for
-orientation; the engine, the LSP and the tests are for proof.
+The GDScript and C# passes use regex, not parsers. They miss or misread
+a string literal that looks like a declaration. They also miss or misread
+a `preload` built from a variable. The scene reader works at the section
+level. When it meets a property value in a shape it does not know, it
+keeps the text as it is and ignores it.
+
+`--paths` checks only paths relative to the script's own node. It skips
+`other.get_node("X")`. It also skips paths through a node the script
+names itself. It reports a node that the game adds at runtime some other
+way as missing.
+
+`--problems` learns the engine's signals from a list in `query.py`, not
+from the engine. It reports an engine signal that the list lacks as
+undeclared. To fix that, add one line to the list. The tool does not
+check that literals in test scripts and under `addons/` exist.
+
+Use the map to find your way around. Use the engine, the LSP and the
+tests for proof.
